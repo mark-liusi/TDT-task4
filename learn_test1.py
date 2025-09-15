@@ -4,6 +4,7 @@ np.random.seed(0)
 #data
 x= np.linspace(0, 10, 50)# 生成等间距数组
 y= 2* x+3+ np.random.randn(50)
+#test
 max_time= 1000
 pianyi= 0.01
 w= np.random.randn()
