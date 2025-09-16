@@ -16,7 +16,7 @@ transform = transforms.Compose(
         transforms.Grayscale(num_output_channels=1),  # 确保是灰度图
         transforms.Resize((28, 28)),  # 调整所有图片到28x28
         transforms.ToTensor(),
-        transforms.Normalize((0.5,), (0.5,)),  # 改进：使用通用标准化，适应不同数据分布
+        transforms.Normalize((0.1307,), (0.3081,)),  # 改进：使用通用标准化，适应不同数据分布
     ]
 )
 
@@ -36,7 +36,7 @@ print(f"数据集大小: {len(test_data)}")
 def remap_labels(target):
     # ImageFolder的映射：{'1': 0, '2': 1, '3': 2, '4': 3, '5': 4}
     # 我们需要的映射：1->1, 2->2, 3->3, 4->4, 5->5
-    return target + 1  # 简单地加1
+    return target  # 简单地加1
 
 
 print(f"注意：类别映射调整后，文件夹'1'->标签1, '2'->标签2, 等等")
