@@ -1,17 +1,19 @@
 #include <ATen/ATen.h> // Tensor 基本操作
 #include <iostream>
+#include <opencv2/core/mat.hpp>
 #include <opencv2/opencv.hpp>
 #include <torch/script.h> // TorchScript 加载/推理
 
 using namespace std;
 using namespace cv;
-//using namespace torch;
-// ====== 全局：模型/标签/预处理参数 ======
+// using namespace torch;
+//  ====== 全局：模型/标签/预处理参数 ======
 static torch::jit::script::Module g_module; // 已加载的 TorchScript 模型
 static vector<string> g_labels;             // 数字的类别
 static int g_in_w = 28, g_in_h = 28; // 模型输入尺寸，训练时为28*28
 static bool g_to_gray = true; // 训练时用的是灰度图，勾选为true
-static vector<double> g_mean = {0.1307}; // 训练时用的参数，为（0.1307， 0.3081）
+static vector<double> g_mean = {
+    0.1307}; // 训练时用的参数，为（0.1307， 0.3081）
 static vector<double> g_std = {0.3081};
 static torch::Device g_device = torch::kCPU; // 我的电脑只有cpu
 
@@ -30,21 +32,25 @@ static vector<string> load_labels(const string &path) {
 // 预处理：把 ROI(Mat) -> Tensor([1,C,H,W])，并做归一化
 static torch::Tensor preprocess(Mat roi) {
   Mat img_resized, img_conv;
-  resize(roi, img_resized, Size(g_in_w, g_in_h)); // 将我们裁剪的图像转变为和模型处理参数一致的图像
+  resize(
+      roi, img_resized,
+      Size(g_in_w, g_in_h)); // 将我们裁剪的图像转变为和模型处理参数一致的图像
   if (g_to_gray) {
-    cvtColor(img_resized, img_conv, COLOR_BGR2GRAY); // BGR->Gray，灰度图，和模型处理一致
+    cvtColor(img_resized, img_conv,
+             COLOR_BGR2GRAY); // BGR->Gray，灰度图，和模型处理一致
   } else {
     cvtColor(img_resized, img_conv, COLOR_BGR2RGB); // BGR->RGB
   }
   img_conv.convertTo(img_conv, CV_32F, 1.0 / 255.0); // [0,1]float
 
   torch::Tensor t;
-    // [H,W] -> [1,H,W]
+  // [H,W] -> [1,H,W]
   t = torch::from_blob(img_conv.data, {img_conv.rows, img_conv.cols},
-                        torch::kFloat32).clone();
-  t = t.unsqueeze(0);//添加通道维度
+                       torch::kFloat32)
+          .clone();
+  t = t.unsqueeze(0);                           //添加通道维度
   t = (t - (float)g_mean[0]) / (float)g_std[0]; // 归一化
-  t = t.unsqueeze(0); // [1,C,H,W]添加梯次维度
+  t = t.unsqueeze(0);                           // [1,C,H,W]添加梯次维度
   return t.to(g_device);
 }
 
@@ -63,7 +69,7 @@ static pair<string, float> infer_one(Mat roi) {
                      : "NA";
   return {label, conf};
 }
-void getcontours(Mat img_final, Mat img_resize, double fps) {
+void getcontours(Mat img_final, Mat img_resize, double fps, Mat img_red) {
   vector<vector<Point>> contours;
   vector<Vec4i> hierarchy;
   findContours(img_final, contours, hierarchy, RETR_EXTERNAL,
@@ -78,8 +84,8 @@ void getcontours(Mat img_final, Mat img_resize, double fps) {
       // —— 推理部分开始：对每个 r 取 ROI，送入模型识别 —— //
       Rect rr = r & Rect(0, 0, img_resize.cols, img_resize.rows); // 防止越界
       if (rr.width > 15 && rr.height > 25) { // 过滤过小框
-        Mat roi = img_resize(rr).clone();  // 取 ROI
-        auto pred = infer_one(roi);        // (label,conf)
+        Mat roi = img_resize(rr).clone();    // 取 ROI
+        auto pred = infer_one(roi);          // (label,conf)
 
         // 在框上方写结果，比如 "7 0.96"
         string txt = pred.first; //+ " "+ to_string(pred.second);
@@ -102,28 +108,23 @@ void getcontours(Mat img_final, Mat img_resize, double fps) {
   }
   putText(img_resize, "fps:" + to_string(fps), Point(700, 50),
           FONT_HERSHEY_SIMPLEX, 1.0, Scalar(255, 255, 255), 2);
-  imshow("img_final", img_resize);
-}
-
-void redcontours(Mat img_final, Mat img_resize) {
-  int hmin = 0, smin = 204, vmin = 170; // 红色灯条的参数
-  int hmax = 100, smax = 255, vmax = 255;
-  Scalar lower(hmin, smin, vmin);
-  Scalar upper(hmax, smax, vmax);
-  inRange(img_final, lower, upper, img_final);
-  vector<vector<Point>> contours;
-  vector<Vec4i> hierarchy;
-  findContours(img_final, contours, hierarchy, RETR_EXTERNAL,
+  // red灯条处理
+  Scalar lower(0, 204, 170);
+  Scalar upper(100, 255, 255);
+  inRange(img_red, lower, upper, img_red);
+  vector<vector<Point>> contours_red;
+  vector<Vec4i> hierarchy_red;
+  findContours(img_red, contours_red, hierarchy_red, RETR_EXTERNAL,
                CHAIN_APPROX_SIMPLE);
 
-  for (int i = 0; i < contours.size(); i++) {
-    double area = contourArea(contours[i]);
+  for (int i = 0; i < contours_red.size(); i++) {
+    double area = contourArea(contours_red[i]);
 
-    Rect r = boundingRect(contours[i]);
+    Rect r = boundingRect(contours_red[i]);
     rectangle(img_resize, r.tl(), r.br(), Scalar(255, 255, 255), 2);
     circle(img_resize, (r.tl() + r.br()) / 2, 4, Scalar(255, 255, 255));
-
   }
+
   imshow("img_final", img_resize);
 }
 
@@ -164,7 +165,7 @@ int main() {
     // hsv部分
     cvtColor(img_resize, img_hsv, COLOR_BGR2HSV);
     GaussianBlur(img_hsv, hsv_blur, Size(5, 5), 5);
-    redcontours(hsv_blur, img_resize);
+    // redcontours(hsv_blur, img_resize);
 
     // 数字部分
     int hmin = 0, smin = 0, vmin = 64; // 数字，即装甲板的参数
@@ -201,14 +202,13 @@ int main() {
     }
 
     bitwise_and(hsv_mask, begin_mask, final_mask);
-    getcontours(final_mask, img_resize, fps);
+    getcontours(final_mask, img_resize, fps, hsv_blur);
     if (waitKey(30) == 27) {
       break;
     }
     t2 = getTickCount();
     fps = getTickFrequency() / (t2 - t1);
   }
-  cout << "hello clang"<<endl;
+  // cout << "hello clang"<<endl;
   return 0;
 }
-// eigen卡尔曼
