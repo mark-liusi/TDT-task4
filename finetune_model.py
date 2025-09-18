@@ -155,7 +155,7 @@ for epoch in range(num_epochs):
     test_losses.append(test_loss)
     test_accuracies.append(test_acc)
 
-    # 学习率调度
+    # 学习率调度pred
     scheduler.step()
 
     print(

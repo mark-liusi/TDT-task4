@@ -203,33 +203,3 @@ plt.tight_layout()
 plt.savefig('training_curves.png')
 plt.show()
 
-# 显示一些预测示例
-print("\n" + "="*30)
-print("预测示例：")
-print("="*30)
-
-data_iter = iter(test_loader)
-images, labels = next(data_iter)
-
-with torch.no_grad():
-    outputs = model(images[:8])  # 预测前8张图片
-    _, predicted = torch.max(outputs, 1)
-
-plt.figure(figsize=(12, 6))
-for i in range(8):
-    plt.subplot(2, 4, i+1)
-    # 反标准化显示
-    img = images[i].squeeze()
-    img = img * 0.3081 + 0.1307  # 反标准化
-    img = torch.clamp(img, 0, 1)  # 确保像素值在[0,1]范围内
-    
-    plt.imshow(img, cmap='gray')
-    true_label = labels[i].item()
-    pred_label = predicted[i].item()
-    color = 'green' if true_label == pred_label else 'red'
-    plt.title(f'真实: {true_label}, 预测: {pred_label}', color=color)
-    plt.axis('off')
-
-plt.tight_layout()
-plt.savefig('prediction_examples.png')
-plt.show()

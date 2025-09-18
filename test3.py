@@ -6,6 +6,10 @@ import numpy as np
 import torch.nn as nn
 import torch.nn.functional as F
 import matplotlib.pyplot as plt
+import matplotlib
+matplotlib.rcParams['font.sans-serif']= ['Noto Sans CJK SC','Noto Sans CJK JP','WenQuanYi Micro Hei','SimHei']  # 支持中文的备选字体
+matplotlib.rcParams['axes.unicode_minus']= False  # 允许坐标轴显示负号
+
 
 # 设置随机种子以确保结果可重现
 torch.manual_seed(42)
@@ -16,7 +20,8 @@ transform = transforms.Compose(
         transforms.Grayscale(num_output_channels=1),  # 确保是灰度图
         transforms.Resize((28, 28)),  # 调整所有图片到28x28
         transforms.ToTensor(),
-        transforms.Normalize((0.1307,), (0.3081,)),  # 改进：使用通用标准化，适应不同数据分布
+        # transforms.Normalize((0.1307,), (0.3081,)),  # 改进：使用通用标准化，适应不同数据分布
+        transforms.Normalize((0.5, ), (0.5, )),
     ]
 )
 
@@ -36,7 +41,7 @@ print(f"数据集大小: {len(test_data)}")
 def remap_labels(target):
     # ImageFolder的映射：{'1': 0, '2': 1, '3': 2, '4': 3, '5': 4}
     # 我们需要的映射：1->1, 2->2, 3->3, 4->4, 5->5
-    return target  # 简单地加1
+    return target+ 1 # 简单地加1
 
 
 print(f"注意：类别映射调整后，文件夹'1'->标签1, '2'->标签2, 等等")
@@ -80,19 +85,15 @@ class ImprovedNet(nn.Module):
         return x
 
 
-# ===== 加载已保存的改进模型 =====
-print("正在加载改进的已保存模型...")
 model = ImprovedNet()  # 必须用相同结构
 model.load_state_dict(
-    torch.load("mnist_fc_improved.pth")
+    # torch.load("mnist_fc_improved.pth")
+    torch.load("mnist_finetuned_on_custom.pth")
 )  # 改进7：加载用Adam优化器和学习率调度训练的改进模型
 model.eval()  # 设置为评估模式（关闭Dropout和BatchNorm的训练模式）
-print("改进模型加载成功！")
 
 # 损失函数（用于测试评估）
 criterion = nn.CrossEntropyLoss()
-# ===== 在测试集上评估模型性能 =====
-print("正在评估模型性能...")
 test_loss = 0.0
 class_correct = list(0.0 for i in range(10))  # 各类预测正确数
 class_total = list(0.0 for i in range(10))  # 各类样本总数
@@ -107,6 +108,7 @@ with torch.no_grad():  # 不求梯度，省内存
         loss = criterion(output, target)
         test_loss += loss.item() * data.size(0)  # 累加测试总损失
         _, pred = torch.max(output, 1)  # 取每行最大logit的索引作为预测类别
+        # pred+= 1
         correct = pred.eq(target)  # 逐元素比较，得到布尔向量
         bs = target.size(0)  # 当前batch真实大小（最后一批可能小）
         for i in range(bs):
@@ -119,7 +121,7 @@ test_loss = test_loss / len(test_loader.dataset)  # 平均测试损失
 print("Test Loss: {:.6f}\n".format(test_loss))
 
 # 各类准确率
-for i in range(10):
+for i in range(1, 6):
     if class_total[i] > 0:
         print(
             "Test Accuracy of %s: %2d%% (%2d/%2d)"
@@ -141,33 +143,11 @@ print(
     % (100.0 * overall_correct / overall_total, overall_correct, overall_total)
 )
 
-# ===== 单张图片预测示例 =====
 
-# 从测试集取一张图片进行预测示例
-print("\n===== 单张图片预测示例 =====")
-data_iter = iter(test_loader)
-images, labels = next(data_iter)
-img = images[1]  # 第2张图
-original_label = labels[1].item()  # ImageFolder的原始标签 (0-4)
-true_label = remap_labels(original_label)  # 重新映射的标签 (1-5)
 
-# 用加载的模型预测
-with torch.no_grad():
-    output = model(img.view(-1, 28 * 28))  # 单张图要展平成 [1, 784]
-    pred = torch.argmax(output, dim=1).item()
-
-print(f"真实标签: {true_label}, 预测结果: {pred}")
-print(f"(原始ImageFolder标签: {original_label} -> 重映射为: {true_label})")
-
-# 显示这张图片
-plt.imshow(img.squeeze(), cmap="gray")
-plt.title(f"True Label: {true_label}, Predicted: {pred}")
-plt.axis("off")  # 不显示坐标轴
-plt.show()
-
-print("自定义数据集推理完成！")
-print(f"注意：这次使用的是你的自定义number数据集")
-print(f"- 数据集包含类别：{test_data.classes}")
-print(f"- 总共 {len(test_data)} 张图片")
-print(f"- 图片已调整为28x28灰度图以匹配模型")
-print(f"- 类别映射：文件夹'1'->标签1, '2'->2, '3'->3, '4'->4, '5'->5")
+# print("自定义数据集推理完成！")
+# print(f"注意：这次使用的是你的自定义number数据集")
+# print(f"- 数据集包含类别：{test_data.classes}")
+# print(f"- 总共 {len(test_data)} 张图片")
+# print(f"- 图片已调整为28x28灰度图以匹配模型")
+# print(f"- 类别映射：文件夹'1'->标签1, '2'->2, '3'->3, '4'->4, '5'->5")
