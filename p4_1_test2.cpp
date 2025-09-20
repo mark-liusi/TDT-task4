@@ -18,6 +18,12 @@ public:
     double distance; // 相机到装甲板中心距离（mm）
     double reproj;
 };
+struct DigitDet {
+    Rect box;      // 数字的矩形框（来自 rr）
+    string label;  // 数字字符串
+};
+static vector<DigitDet> digits_this_frame;
+static std::unordered_map<int, Armor> g_armor_map;
 Mat matrix= (Mat_<double>(3,3)<<
     1777.4091, 0, 710.7598,
     0, 1775.4171, 534.7207,
@@ -119,19 +125,24 @@ double reprojRMSE(const vector<Point3d>& obj, const vector<Point2d>& img,
     }
     return sqrt(se/ proj.size());
 }
-void printPose(const Mat& rvec, const Mat& tvec)// 打印revc和tvec和离镜头距离的信息
+void printPose(const Mat& rvec, const Mat& tvec, int armor_id)// 打印revc和tvec和离镜头距离的信息
 {
     double X= tvec.at<double>(0);
     double Y= tvec.at<double>(1);
     double Z= tvec.at<double>(2);
     double dist_cam_to_armor= sqrt(X*X+ Y*Y+ Z*Z); // 与3D单位一致（mm）
+    Armor &A= g_armor_map[armor_id]; // 不存在会自动创建
+    A.id= armor_id;
+    A.rvec= rvec.clone();
+    A.tvec= tvec.clone();
+    A.distance= dist_cam_to_armor;
 
     cout<<"rvec = ["<<rvec.at<double>(0)<<", "<<rvec.at<double>(1)<<", "<<rvec.at<double>(2)<<"]\n";
     cout<<"tvec = ["<<X<<", "<<Y<<", "<<Z<<"] mm\n";
     cout<<"distance = "<<dist_cam_to_armor<<" mm\n";
 }
 // 计算pnp
-bool runPnP(const vector<Point3d>& obj, const vector<Point2d>& img, int flag, const string& name)
+bool runPnP(const vector<Point3d>& obj, const vector<Point2d>& img, int flag, const string& name, int armor_id)
 {
     Mat rvec, tvec;
     bool ok= solvePnP(obj, img, matrix, dist, rvec, tvec, false, flag);
@@ -140,18 +151,31 @@ bool runPnP(const vector<Point3d>& obj, const vector<Point2d>& img, int flag, co
         cout<<"solvePnP 失败\n";
         return false;
     }
-    printPose(rvec, tvec);
+    printPose(rvec, tvec, armor_id);
     double rmse= reprojRMSE(obj, img, rvec, tvec);
     cout<<"reproj RMSE = "<<rmse<<" px\n\n";
     return true;
 }
+int find_best_digit(const Rect& armor_box, const vector<DigitDet>& digits_this_frame) {
+    if(digits_this_frame.empty()) return -1;
+    Point ac= (armor_box.tl()+ armor_box.br())/2;
+    double best_d= 1e18; int best_idx= -1;
+    for(int i=0; i<digits_this_frame.size(); i++) {
+        Point dc= (digits_this_frame[i].box.tl()+ digits_this_frame[i].box.br())/2;
+        double dx= ac.x- dc.x, dy= ac.y- dc.y;
+        double d2= dx*dx+ dy*dy;
+        if(d2< best_d) { best_d= d2; best_idx= i; }
+    }
+    return best_idx;
+}
+
 
 void number_contours(Mat img_final, Mat img_resize, double fps) {
   vector<vector<Point>> contours;
   vector<Vec4i> hierarchy;
   findContours(img_final, contours, hierarchy, RETR_EXTERNAL,
                CHAIN_APPROX_SIMPLE);
-
+  //vector<DigitDet> digits_this_frame; // ← 本帧识别到的数字列表vector<DigitDet> digits_this_frame; // ← 本帧识别到的数字列表
   for (int i = 0; i < contours.size(); i++) {
     double area = contourArea(contours[i]);
     if (area < 300) {
@@ -179,6 +203,9 @@ void number_contours(Mat img_final, Mat img_resize, double fps) {
           rectangle(img_resize, r.tl(), r.br(), color, 2); // 画框
           circle(img_resize, (r.tl() + r.br()) / 2, 4,
                  Scalar(0, 255, 0)); // 画中心点
+          DigitDet d; 
+          d.box= rr; d.label= txt;  
+          digits_this_frame.push_back(d);
         }
       }
     }
@@ -203,6 +230,12 @@ void redcontours(Mat img_final, Mat img_resize) {
     double area = contourArea(contours[i]);
 
     Rect r = boundingRect(contours[i]);
+    int k= find_best_digit(r, digits_this_frame);
+    if(k<0) continue; // 没匹配到数字，不进行PnP
+    const string& lab= digits_this_frame[k].label;
+    // 只保留 0~9 的数字ID；若你的标签带字母，按需处理
+    if(lab.empty() || !isdigit(lab[0])) continue;
+    int armor_id= lab[0]- '0';
 
     vector<Point2d> light(6);
     light[0] = Point2d(r.x, r.y);                   
@@ -212,10 +245,10 @@ void redcontours(Mat img_final, Mat img_resize) {
     light[4] = Point2d(r.x + r.width, r.y + r.height/2.0); 
     light[5] = Point2d(r.x + r.width, r.y + r.height);
     vector<Point3d> obj= makeObjectPoints();
-    runPnP(obj, light, SOLVEPNP_ITERATIVE, "SOLVEPNP_ITERATIVE"); // 迭代法，稳、精度高
+    runPnP(obj, light, SOLVEPNP_ITERATIVE, "SOLVEPNP_ITERATIVE", armor_id); // 迭代法，稳、精度高
     rectangle(img_resize, r.tl(), r.br(), Scalar(255, 255, 255), 2);
     circle(img_resize, (r.tl() + r.br()) / 2, 4, Scalar(255, 255, 255));
-
+    putText(img_resize, "ID:"+ lab, r.tl()+ Point(0,-5), FONT_HERSHEY_SIMPLEX, 0.7, Scalar(255,255,255), 2);
   }
   imshow("img_final", img_resize);
 }
