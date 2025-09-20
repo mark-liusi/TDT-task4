@@ -1,11 +1,48 @@
 #include <ATen/ATen.h> // Tensor 基本操作
 #include <iostream>
 #include <opencv2/core/mat.hpp>
+#include <opencv2/core/types.hpp>
 #include <opencv2/opencv.hpp>
 #include <torch/script.h> // TorchScript 加载/推理
+#include <vector>
 
 using namespace std;
 using namespace cv;
+
+class Armor {
+public:
+    Armor(): id(-1), distance(0) {}
+    int id;        // 数字ID
+    Mat rvec;      // 旋转向量
+    Mat tvec;      // 平移向量
+    double distance; // 相机到装甲板中心距离（mm）
+    double reproj;
+};
+Mat matrix= (Mat_<double>(3,3)<<
+    1777.4091, 0, 710.7598,
+    0, 1775.4171, 534.7207,
+    0, 0, 1);
+Mat dist= (Mat_<double>(1,5)<<
+    -0.563142, 0.183051, 0.001964, 0.000925, 0.568833);
+const double SMALL_ARMOR_WIDTH= 135.0;  // 两灯条中心线水平距
+const double SMALL_ARMOR_HEIGHT= 55.0;  // 单根灯条有效高度
+
+vector<Point3d> makeObjectPoints()
+{
+    double W= SMALL_ARMOR_WIDTH;
+    double H= SMALL_ARMOR_HEIGHT;
+    vector<Point3d> obj;
+    // 左灯条：上、中、下
+    obj.push_back(Point3d(-W/2, +H/2, 0)); // L_top
+    obj.push_back(Point3d(-W/2,   0 , 0)); // L_mid
+    obj.push_back(Point3d(-W/2, -H/2, 0)); // L_bot
+    // 右灯条：上、中、下
+    obj.push_back(Point3d(+W/2, +H/2, 0)); // R_top
+    obj.push_back(Point3d(+W/2,   0 , 0)); // R_mid
+    obj.push_back(Point3d(+W/2, -H/2, 0)); // R_bot
+    return obj;
+}
+
 // using namespace torch;
 //  ====== 全局：模型/标签/预处理参数 ======
 static torch::jit::script::Module g_module; // 已加载的 TorchScript 模型
@@ -54,8 +91,7 @@ static torch::Tensor preprocess(Mat roi) {
   return t.to(g_device);
 }
 
-// 小工具：对一个 ROI 做一次推理，返回 (label, conf)
-// 说明：若你的模型输出不是 [N,num_classes] 的 logits，需要按你的实际改这里
+// 对一个 ROI 做一次推理，返回 (label, conf)
 static pair<string, float> infer_one(Mat roi) {
   torch::InferenceMode no_grad;                               // 关闭梯度
   torch::Tensor tin = preprocess(roi);                        // 预处理
@@ -69,7 +105,48 @@ static pair<string, float> infer_one(Mat roi) {
                      : "NA";
   return {label, conf};
 }
-void getcontours(Mat img_final, Mat img_resize, double fps, Mat img_red) {
+//通过rvec, tvec来计算重投影误差，比较投影结果和原始输入的 2D 点之间的像素偏差。
+double reprojRMSE(const vector<Point3d>& obj, const vector<Point2d>& img,
+                  const Mat& rvec, const Mat& tvec)
+{
+    vector<Point2d> proj;
+    projectPoints(obj, rvec, tvec, matrix, dist, proj);
+    double se= 0.0;
+    for(size_t i= 0; i<proj.size(); i++){
+        double dx= proj[i].x- img[i].x;
+        double dy= proj[i].y- img[i].y;
+        se+= dx*dx+ dy*dy;
+    }
+    return sqrt(se/ proj.size());
+}
+void printPose(const Mat& rvec, const Mat& tvec)// 打印revc和tvec和离镜头距离的信息
+{
+    double X= tvec.at<double>(0);
+    double Y= tvec.at<double>(1);
+    double Z= tvec.at<double>(2);
+    double dist_cam_to_armor= sqrt(X*X+ Y*Y+ Z*Z); // 与3D单位一致（mm）
+
+    cout<<"rvec = ["<<rvec.at<double>(0)<<", "<<rvec.at<double>(1)<<", "<<rvec.at<double>(2)<<"]\n";
+    cout<<"tvec = ["<<X<<", "<<Y<<", "<<Z<<"] mm\n";
+    cout<<"distance = "<<dist_cam_to_armor<<" mm\n";
+}
+// 计算pnp
+bool runPnP(const vector<Point3d>& obj, const vector<Point2d>& img, int flag, const string& name)
+{
+    Mat rvec, tvec;
+    bool ok= solvePnP(obj, img, matrix, dist, rvec, tvec, false, flag);
+    cout<<"---- "<<name<<" ----\n";
+    if(!ok){
+        cout<<"solvePnP 失败\n";
+        return false;
+    }
+    printPose(rvec, tvec);
+    double rmse= reprojRMSE(obj, img, rvec, tvec);
+    cout<<"reproj RMSE = "<<rmse<<" px\n\n";
+    return true;
+}
+
+void number_contours(Mat img_final, Mat img_resize, double fps) {
   vector<vector<Point>> contours;
   vector<Vec4i> hierarchy;
   findContours(img_final, contours, hierarchy, RETR_EXTERNAL,
@@ -87,7 +164,7 @@ void getcontours(Mat img_final, Mat img_resize, double fps, Mat img_red) {
         Mat roi = img_resize(rr).clone();    // 取 ROI
         auto pred = infer_one(roi);          // (label,conf)
 
-        // 在框上方写结果，比如 "7 0.96"
+        // 写结果，预测的数字
         string txt = pred.first; //+ " "+ to_string(pred.second);
         Scalar color(0, 0, 0);
         if (txt == "3") {
@@ -108,25 +185,41 @@ void getcontours(Mat img_final, Mat img_resize, double fps, Mat img_red) {
   }
   putText(img_resize, "fps:" + to_string(fps), Point(700, 50),
           FONT_HERSHEY_SIMPLEX, 1.0, Scalar(255, 255, 255), 2);
-  // red灯条处理
-  Scalar lower(0, 204, 170);
-  Scalar upper(100, 255, 255);
-  inRange(img_red, lower, upper, img_red);
-  vector<vector<Point>> contours_red;
-  vector<Vec4i> hierarchy_red;
-  findContours(img_red, contours_red, hierarchy_red, RETR_EXTERNAL,
-               CHAIN_APPROX_SIMPLE);
-
-  for (int i = 0; i < contours_red.size(); i++) {
-    double area = contourArea(contours_red[i]);
-
-    Rect r = boundingRect(contours_red[i]);
-    rectangle(img_resize, r.tl(), r.br(), Scalar(255, 255, 255), 2);
-    circle(img_resize, (r.tl() + r.br()) / 2, 4, Scalar(255, 255, 255));
-  }
 
   imshow("img_final", img_resize);
 }
+void redcontours(Mat img_final, Mat img_resize) {
+  int hmin = 0, smin = 204, vmin = 170; // 红色灯条的参数
+  int hmax = 100, smax = 255, vmax = 255;
+  Scalar lower(hmin, smin, vmin);
+  Scalar upper(hmax, smax, vmax);
+  inRange(img_final, lower, upper, img_final);
+  vector<vector<Point>> contours;
+  vector<Vec4i> hierarchy;
+  findContours(img_final, contours, hierarchy, RETR_EXTERNAL,
+               CHAIN_APPROX_SIMPLE);
+
+  for (int i = 0; i < contours.size(); i++) {
+    double area = contourArea(contours[i]);
+
+    Rect r = boundingRect(contours[i]);
+
+    vector<Point2d> light(6);
+    light[0] = Point2d(r.x, r.y);                   
+    light[1] = Point2d(r.x, r.y + r.height/2.0);    
+    light[2] = Point2d(r.x, r.y + r.height);        
+    light[3] = Point2d(r.x + r.width, r.y);                
+    light[4] = Point2d(r.x + r.width, r.y + r.height/2.0); 
+    light[5] = Point2d(r.x + r.width, r.y + r.height);
+    vector<Point3d> obj= makeObjectPoints();
+    runPnP(obj, light, SOLVEPNP_ITERATIVE, "SOLVEPNP_ITERATIVE"); // 迭代法，稳、精度高
+    rectangle(img_resize, r.tl(), r.br(), Scalar(255, 255, 255), 2);
+    circle(img_resize, (r.tl() + r.br()) / 2, 4, Scalar(255, 255, 255));
+
+  }
+  imshow("img_final", img_resize);
+}
+
 
 int main() {
   string path = "/home/liusi/文档/code/TDT-task4/Infantry_red.avi";
@@ -165,7 +258,7 @@ int main() {
     // hsv部分
     cvtColor(img_resize, img_hsv, COLOR_BGR2HSV);
     GaussianBlur(img_hsv, hsv_blur, Size(5, 5), 5);
-    // redcontours(hsv_blur, img_resize);
+    redcontours(hsv_blur, img_resize);
 
     // 数字部分
     int hmin = 0, smin = 0, vmin = 64; // 数字，即装甲板的参数
@@ -186,8 +279,7 @@ int main() {
     Mat bin = img_clahe;
     threshold(img_clahe, bin, 0, 255, THRESH_BINARY | THRESH_OTSU);
     Mat labels, stats, centroids;
-    int n =
-        connectedComponentsWithStats(bin, labels, stats, centroids, 8, CV_32S);
+    int n = connectedComponentsWithStats(bin, labels, stats, centroids, 8, CV_32S);
     Mat begin_mask = Mat::zeros(bin.size(), CV_8U);
     for (int i = 1; i < n; i++) { // 0是背景
       int area = stats.at<int>(i, CC_STAT_AREA);
@@ -202,7 +294,8 @@ int main() {
     }
 
     bitwise_and(hsv_mask, begin_mask, final_mask);
-    getcontours(final_mask, img_resize, fps, hsv_blur);
+    number_contours(final_mask, img_resize, fps);
+    
     if (waitKey(30) == 27) {
       break;
     }
