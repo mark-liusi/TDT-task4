@@ -2,6 +2,7 @@
 #include <iostream>
 #include <opencv2/core/mat.hpp>
 #include <opencv2/core/types.hpp>
+#include <opencv2/imgproc.hpp>
 #include <opencv2/opencv.hpp>
 #include <torch/script.h> // TorchScript 加载/推理
 #include <vector>
@@ -15,7 +16,7 @@ public:
     int id;        // 数字ID
     Mat rvec;      // 旋转向量
     Mat tvec;      // 平移向量
-    double distance; // 相机到装甲板中心距离（mm）
+    double distance; // 相机到装甲板中心距离
     double reproj;
 };
 struct DigitDet {
@@ -23,29 +24,27 @@ struct DigitDet {
     string label;  // 数字字符串
 };
 static vector<DigitDet> digits_this_frame;
-static std::unordered_map<int, Armor> g_armor_map;
+static std::unordered_map<int, Armor> g_armor_map;//哈希表容器，使装甲板id和装甲板对象对应起来，按id来保存装甲板的信息
 Mat matrix= (Mat_<double>(3,3)<<
     1777.4091, 0, 710.7598,
     0, 1775.4171, 534.7207,
     0, 0, 1);
 Mat dist= (Mat_<double>(1,5)<<
     -0.563142, 0.183051, 0.001964, 0.000925, 0.568833);
-const double SMALL_ARMOR_WIDTH= 135.0;  // 两灯条中心线水平距
-const double SMALL_ARMOR_HEIGHT= 55.0;  // 单根灯条有效高度
 
-vector<Point3d> makeObjectPoints()
+vector<Point3d> makeObjectPoints()//灯条的3d信息，也就是实际测量信息
 {
-    double W= SMALL_ARMOR_WIDTH;
-    double H= SMALL_ARMOR_HEIGHT;
+    double W= 135.0;//宽
+    double H= 55.0;//高
     vector<Point3d> obj;
     // 左灯条：上、中、下
-    obj.push_back(Point3d(-W/2, +H/2, 0)); // L_top
-    obj.push_back(Point3d(-W/2,   0 , 0)); // L_mid
-    obj.push_back(Point3d(-W/2, -H/2, 0)); // L_bot
+    obj.push_back(Point3d(-W/2, +H/2, 0)); 
+    obj.push_back(Point3d(-W/2,   0 , 0)); 
+    obj.push_back(Point3d(-W/2, -H/2, 0)); 
     // 右灯条：上、中、下
-    obj.push_back(Point3d(+W/2, +H/2, 0)); // R_top
-    obj.push_back(Point3d(+W/2,   0 , 0)); // R_mid
-    obj.push_back(Point3d(+W/2, -H/2, 0)); // R_bot
+    obj.push_back(Point3d(+W/2, +H/2, 0)); 
+    obj.push_back(Point3d(+W/2,   0 , 0)); 
+    obj.push_back(Point3d(+W/2, -H/2, 0)); 
     return obj;
 }
 
@@ -89,8 +88,7 @@ static torch::Tensor preprocess(Mat roi) {
   torch::Tensor t;
   // [H,W] -> [1,H,W]
   t = torch::from_blob(img_conv.data, {img_conv.rows, img_conv.cols},
-                       torch::kFloat32)
-          .clone();
+                       torch::kFloat32).clone();
   t = t.unsqueeze(0);                           //添加通道维度
   t = (t - (float)g_mean[0]) / (float)g_std[0]; // 归一化
   t = t.unsqueeze(0);                           // [1,C,H,W]添加梯次维度
@@ -125,6 +123,7 @@ double reprojRMSE(const vector<Point3d>& obj, const vector<Point2d>& img,
     }
     return sqrt(se/ proj.size());
 }
+
 void printPose(const Mat& rvec, const Mat& tvec, int armor_id)// 打印revc和tvec和离镜头距离的信息
 {
     double X= tvec.at<double>(0);
@@ -156,6 +155,7 @@ bool runPnP(const vector<Point3d>& obj, const vector<Point2d>& img, int flag, co
     cout<<"reproj RMSE = "<<rmse<<" px\n\n";
     return true;
 }
+
 int find_best_digit(const Rect& armor_box, const vector<DigitDet>& digits_this_frame) {
     if(digits_this_frame.empty()) return -1;
     Point ac= (armor_box.tl()+ armor_box.br())/2;
@@ -169,12 +169,10 @@ int find_best_digit(const Rect& armor_box, const vector<DigitDet>& digits_this_f
     return best_idx;
 }
 
-
 void number_contours(Mat img_final, Mat img_resize, double fps) {
   vector<vector<Point>> contours;
   vector<Vec4i> hierarchy;
-  findContours(img_final, contours, hierarchy, RETR_EXTERNAL,
-               CHAIN_APPROX_SIMPLE);
+  findContours(img_final, contours, hierarchy, RETR_EXTERNAL, CHAIN_APPROX_SIMPLE);
   //vector<DigitDet> digits_this_frame; // ← 本帧识别到的数字列表vector<DigitDet> digits_this_frame; // ← 本帧识别到的数字列表
   for (int i = 0; i < contours.size(); i++) {
     double area = contourArea(contours[i]);
@@ -212,9 +210,9 @@ void number_contours(Mat img_final, Mat img_resize, double fps) {
   }
   putText(img_resize, "fps:" + to_string(fps), Point(700, 50),
           FONT_HERSHEY_SIMPLEX, 1.0, Scalar(255, 255, 255), 2);
-
   imshow("img_final", img_resize);
 }
+
 void redcontours(Mat img_final, Mat img_resize) {
   int hmin = 0, smin = 204, vmin = 170; // 红色灯条的参数
   int hmax = 100, smax = 255, vmax = 255;
@@ -276,8 +274,7 @@ int main() {
     return -1;
   }
 
-  Mat img, img_hsv, hsv_mask, img_resize, img_gray, hsv_blur, gray_blur,
-      img_clahe, final_mask;
+  Mat img, img_hsv, hsv_mask, img_resize, img_gray, hsv_blur, gray_blur, img_clahe, final_mask;
 
   double fps = 0.0;
   int64 t1, t2;
@@ -285,10 +282,7 @@ int main() {
     t1 = getTickCount();
     cap.read(img);
 
-    resize(img, img_resize, Size(900, 600));
-    imshow("img", img_resize);
-
-    // hsv部分
+    resize(img, img_resize, Size(900, 600));    // hsv部分
     cvtColor(img_resize, img_hsv, COLOR_BGR2HSV);
     GaussianBlur(img_hsv, hsv_blur, Size(5, 5), 5);
     redcontours(hsv_blur, img_resize);
@@ -335,6 +329,5 @@ int main() {
     t2 = getTickCount();
     fps = getTickFrequency() / (t2 - t1);
   }
-  // cout << "hello clang"<<endl;
   return 0;
 }
