@@ -38,3 +38,4 @@ foreach(src ${SRC_FILES})
     # target_compile_definitions(${exe} PRIVATE _GLIBCXX_USE_CXX11_ABI=1)
     # 但二选一即可，避免和 TORCH_CXX_FLAGS 里的设置冲突。
 endforeach()
+# wo shi 
