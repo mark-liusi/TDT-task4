@@ -3,3 +3,4 @@
 *.json
 /.cache
 *.avi
+CMakeLists.txt
