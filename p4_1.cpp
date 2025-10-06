@@ -1,4 +1,5 @@
 #include<iostream>
+#include <opencv2/core/types.hpp>
 #include<opencv2/opencv.hpp>
 using namespace std;
 using namespace cv;
@@ -37,8 +38,8 @@ void redcontours(Mat img_final, Mat img_resize){
       double area= contourArea(contours[i]);
       
       Rect r = boundingRect(contours[i]);
-      rectangle(img_resize, r.tl(), r.br(), (255,255,255), 2);
-      circle(img_resize, (r.tl()+r.br())/2, 4, (255, 255, 255));
+      rectangle(img_resize, r.tl(), r.br(), Scalar(255,255,255), 2);
+      circle(img_resize, (r.tl()+r.br())/2, 4, Scalar(255, 255, 255));
       
       //rectangle(img_resize, boundRect[i].tl(), boundRect[i].br(), Scalar(0, 255, 0), 5);
    }
