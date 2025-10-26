@@ -2,5 +2,8 @@
     "python-envs.defaultEnvManager": "ms-python.python:conda",
     "python-envs.defaultPackageManager": "ms-python.python:conda",
     "python-envs.pythonProjects": [],
-    "editor.formatOnSave": true
+    "editor.formatOnSave": true,
+    "python.defaultInterpreterPath": "/home/liusi/anaconda3/envs/ml310/bin/python",
+    "python.analysis.extraPaths": [],
+    "python.analysis.autoImportCompletions": true
 }
